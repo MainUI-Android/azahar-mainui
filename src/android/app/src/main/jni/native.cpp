@@ -1359,4 +1359,31 @@ void JNICALL Java_org_citra_citra_1emu_NativeLibrary_addDefaultSetting(JNIEnv* e
     Config::AddDefaultSettingValue(GetJString(env, key), GetJString(env, value));
 }
 
+// MainUI State API (io.github.mainui.stateapi.AzaharStates): MainUI (a frontend) saves and loads
+// states directly, through saveState / loadState above.
+jboolean Java_org_citra_citra_1emu_NativeLibrary_mainuiReady([[maybe_unused]] JNIEnv* env,
+                                                             [[maybe_unused]] jobject obj) {
+    return static_cast<jboolean>(!stop_run && !pause_emulation &&
+                                 Core::System::GetInstance().IsPoweredOn());
+}
+
+jlong Java_org_citra_citra_1emu_NativeLibrary_mainuiSlotTime([[maybe_unused]] JNIEnv* env,
+                                                             [[maybe_unused]] jobject obj,
+                                                             jint slot) {
+    const Core::System& system{Core::System::GetInstance()};
+    if (!system.IsPoweredOn()) {
+        return 0;
+    }
+    u64 title_id;
+    if (system.GetAppLoader().ReadProgramId(title_id) != Loader::ResultStatus::Success) {
+        return 0;
+    }
+    const auto info = Core::GetSaveStateInfo(title_id, system.Movie().GetCurrentMovieID(),
+                                             static_cast<u32>(slot));
+    if (info.slot != static_cast<u32>(slot)) {
+        return 0;
+    }
+    return static_cast<jlong>(info.time * 1000);
+}
+
 } // extern "C"

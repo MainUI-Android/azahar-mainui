@@ -167,6 +167,8 @@ class EmulationActivity : AppCompatActivity() {
 
         isEmulationRunning = true
         instance = this
+        // MainUI State API: MainUI (a frontend) saves and loads this game's states.
+        io.github.mainui.stateapi.AzaharStates.launched()
 
         applyOrientationSettings() // Check for orientation settings at startup
 
@@ -184,6 +186,7 @@ class EmulationActivity : AppCompatActivity() {
             return
         }
         setIntent(intent)
+        io.github.mainui.stateapi.AzaharStates.launched()
 
         NativeLibrary.stopEmulation()
         NativeLibrary.playTimeManagerStop()
@@ -284,6 +287,7 @@ class EmulationActivity : AppCompatActivity() {
             }
         }
         super.onResume()
+        io.github.mainui.stateapi.AzaharStates.resumed(true)
     }
 
     override fun onStop() {
@@ -292,6 +296,7 @@ class EmulationActivity : AppCompatActivity() {
     }
 
     override fun onPause() {
+        io.github.mainui.stateapi.AzaharStates.resumed(false)
         gamepadEventHandler.reset()
         super.onPause()
     }
@@ -322,6 +327,7 @@ class EmulationActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        io.github.mainui.stateapi.MainUIStateApi.detach(io.github.mainui.stateapi.AzaharStates)
         EmulationLifecycleUtil.removeHook(onShutdown)
         NativeLibrary.playTimeManagerStop()
         isEmulationRunning = false
