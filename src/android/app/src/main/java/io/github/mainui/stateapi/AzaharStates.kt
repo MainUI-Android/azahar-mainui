@@ -42,6 +42,13 @@ object AzaharStates : MainUIStateApi.Emulator {
 
     override fun slotCount() = NativeLibrary.SAVESTATE_SLOT_COUNT - 1
 
+    override fun pause(): Boolean {
+        NativeLibrary.pauseEmulation()
+        return true
+    }
+
+    override fun resume() = NativeLibrary.unPauseEmulation()
+
     override fun save(slot: Int): String {
         val n = n(slot)
         val start = System.currentTimeMillis() / 1000 * 1000 // (the state's time is in whole seconds)
