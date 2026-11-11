@@ -681,6 +681,12 @@ object NativeLibrary {
 
     external fun loadState(slot: Int)
 
+    // MainUI State API (io.github.mainui.stateapi.AzaharStates)
+    /** A game runs, not paused. */
+    external fun mainuiReady(): Boolean
+    /** When [slot] was saved, ms since 1970 (0: empty or unreadable by this build). */
+    external fun mainuiSlotTime(slot: Int): Long
+
     /**
      * Logs the Citra version, Android version and, CPU.
      */

@@ -64,10 +64,12 @@ android {
         // The application ID refers to Lime3DS to allow for
         // the Play Store listing, which was originally set up for Lime3DS, to still be used.
         applicationId = "org.azahar_emu.azahar"
+        // MainUI-Android build: installs beside the official app (CI sets the version).
+        applicationIdSuffix = ".mainui"
         minSdk = 29
         targetSdk = 37
-        versionCode = autoVersion
-        versionName = getGitVersion()
+        versionCode = System.getenv("MAINUI_VERSION_CODE")?.toIntOrNull() ?: autoVersion
+        versionName = System.getenv("MAINUI_VERSION_NAME") ?: getGitVersion()
 
         ndk {
             //noinspection ChromeOsAbiSupport

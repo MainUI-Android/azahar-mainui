@@ -52,6 +52,10 @@ object UpdateChecker {
     }
 
     fun getLatestRelease(includePrereleases: Boolean): String? {
+        // MainUI-Android build: MainUI updates it from MainUI-Android's releases, not this.
+        if (org.citra.citra_emu.BuildConfig.APPLICATION_ID.endsWith(".mainui")) {
+            return null
+        }
         val updateCheckUrl = "https://api.github.com"
         var updateCheckPath = "/repos/azahar-emu/azahar"
         if (includePrereleases) { // This can return either a prerelease or a stable release,
