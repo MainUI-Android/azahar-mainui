@@ -1,3 +1,4 @@
+MainUI patch 3cd283dbf8bf
 diff --git a/src/android/app/build.gradle.kts b/src/android/app/build.gradle.kts
 index d873af155..19cb3aaab 100644
 --- a/src/android/app/build.gradle.kts
@@ -49,10 +50,10 @@ index 022a4f625..afe7e513e 100644
  
 diff --git a/src/android/app/src/main/java/io/github/mainui/stateapi/AzaharStates.kt b/src/android/app/src/main/java/io/github/mainui/stateapi/AzaharStates.kt
 new file mode 100644
-index 000000000..724814b72
+index 000000000..b09debd02
 --- /dev/null
 +++ b/src/android/app/src/main/java/io/github/mainui/stateapi/AzaharStates.kt
-@@ -0,0 +1,71 @@
+@@ -0,0 +1,95 @@
 +package io.github.mainui.stateapi
 +
 +import org.citra.citra_emu.NativeLibrary
@@ -72,10 +73,14 @@ index 000000000..724814b72
 +    /** A game was just asked for: the one running before it doesn't count until it has stopped. */
 +    @Volatile private var waitForStop = false
 +
-+    /** A game is starting (the activity created, or handed a new game): attach for it. */
++    /**
++     * The activity is up: attach. [newGame]: a game is starting, the one running before it
++     * doesn't count until it has stopped (not when the activity is only recreated, which keeps
++     * the game running).
++     */
 +    @JvmStatic
-+    fun launched() {
-+        waitForStop = NativeLibrary.isRunning()
++    fun launched(newGame: Boolean) {
++        if (newGame) waitForStop = NativeLibrary.isRunning()
 +        MainUIStateApi.attach(this)
 +    }
 +
@@ -97,18 +102,38 @@ index 000000000..724814b72
 +
 +    override fun slotCount() = NativeLibrary.SAVESTATE_SLOT_COUNT - 1
 +
++    /** MainUI's pause took effect (not one Azahar's own menu holds). */
++    @Volatile private var pausedByMainUi = false
++
 +    override fun pause(): Boolean {
-+        NativeLibrary.pauseEmulation()
++        if (NativeLibrary.mainuiReady()) {
++            NativeLibrary.pauseEmulation()
++            pausedByMainUi = true
++        }
 +        return true
 +    }
 +
-+    override fun resume() = NativeLibrary.unPauseEmulation()
++    override fun resume() {
++        if (!pausedByMainUi) return
++        pausedByMainUi = false
++        NativeLibrary.unPauseEmulation()
++    }
 +
 +    override fun save(slot: Int): String {
 +        val n = n(slot)
 +        val start = System.currentTimeMillis() / 1000 * 1000 // (the state's time is in whole seconds)
 +        NativeLibrary.saveState(n)
-+        if (!MainUIStateApi.await({ NativeLibrary.mainuiSlotTime(n) >= start }, 60_000)) {
++        // The header is written first, the state after it: done once the file stops growing.
++        var size = -1L
++        var same = 0
++        if (!MainUIStateApi.await({
++                if (NativeLibrary.mainuiSlotTime(n) < start) return@await false
++                val now = NativeLibrary.mainuiSlotSize(n)
++                same = if (now == size && now > 256) same + 1 else 0
++                size = now
++                Thread.sleep(100)
++                same >= 3
++            }, 60_000)) {
 +            throw IllegalStateException("Azahar didn't finish saving the state")
 +        }
 +        return "Azahar slot $n"
@@ -126,10 +151,10 @@ index 000000000..724814b72
 +}
 diff --git a/src/android/app/src/main/java/io/github/mainui/stateapi/MainUIStateApi.java b/src/android/app/src/main/java/io/github/mainui/stateapi/MainUIStateApi.java
 new file mode 100644
-index 000000000..b5b230aab
+index 000000000..1a79f34f4
 --- /dev/null
 +++ b/src/android/app/src/main/java/io/github/mainui/stateapi/MainUIStateApi.java
-@@ -0,0 +1,291 @@
+@@ -0,0 +1,320 @@
 +package io.github.mainui.stateapi;
 +
 +import android.content.BroadcastReceiver;
@@ -239,6 +264,8 @@ index 000000000..b5b230aab
 +    private static volatile Emulator emulator;
 +    /** When [emulator] was attached ({@link SystemClock#uptimeMillis}). */
 +    private static volatile long attachedAt;
++    /** MainUI's menu holds the game paused (between its pause and its resume). */
++    private static volatile boolean mainUiPaused;
 +    private static final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
 +        Thread t = new Thread(r, "mainui-state-api");
 +        t.setDaemon(true);
@@ -254,7 +281,7 @@ index 000000000..b5b230aab
 +    private MainUIStateApi() {}
 +
 +    /** A game's emulator is up (call again for each new game): commands go to [e] from now on. */
-+    public static void attach(Emulator e) { attachedAt = SystemClock.uptimeMillis(); emulator = e; }
++    public static void attach(Emulator e) { attachedAt = SystemClock.uptimeMillis(); mainUiPaused = false; emulator = e; }
 +
 +    /** The game ended (or its screen went away): no emulator until the next [attach]. */
 +    public static void detach(Emulator e) { if (emulator == e) emulator = null; }
@@ -300,6 +327,8 @@ index 000000000..b5b230aab
 +                Log.i(TAG, "launch load: slot " + slot + " loaded");
 +            } catch (Throwable t) {
 +                Log.w(TAG, "launch load of slot " + slot + " failed", t);
++            } finally {
++                keepPaused(e);
 +            }
 +        });
 +    }
@@ -307,21 +336,33 @@ index 000000000..b5b230aab
 +    /** Carries out a command broadcast (see the class comment) and answers it. */
 +    public static void handle(Context context, Intent intent) {
 +        final Context ctx = context.getApplicationContext();
-+        final String command = intent.getStringExtra(EXTRA_COMMAND);
-+        final int slot = intent.getIntExtra(EXTRA_SLOT, 0);
-+        final String request = intent.getStringExtra(EXTRA_REQUEST);
-+        final String replyTo = intent.getStringExtra(EXTRA_REPLY_TO);
-+        final long waitMs = intent.getLongExtra(EXTRA_WAIT_MS, 15_000);
-+        final long settleMs = intent.getLongExtra(EXTRA_SETTLE_MS, 300);
-+        final long notBefore = intent.getLongExtra(EXTRA_NOT_BEFORE, 0);
++        final String command, request, replyTo;
++        final int slot;
++        final long waitMs, settleMs, notBefore;
++        try {
++            command = intent.getStringExtra(EXTRA_COMMAND);
++            slot = intent.getIntExtra(EXTRA_SLOT, 0);
++            request = intent.getStringExtra(EXTRA_REQUEST);
++            replyTo = intent.getStringExtra(EXTRA_REPLY_TO);
++            // (Bounded: one command can't keep the worker from every later one.)
++            waitMs = Math.min(intent.getLongExtra(EXTRA_WAIT_MS, 15_000), 180_000);
++            settleMs = Math.min(intent.getLongExtra(EXTRA_SETTLE_MS, 300), 10_000);
++            notBefore = intent.getLongExtra(EXTRA_NOT_BEFORE, 0);
++        } catch (RuntimeException bad) {
++            // Extras another app sent that can't be read: not a reason to crash the game.
++            Log.w(TAG, "unreadable command", bad);
++            return;
++        }
 +        if ("pause".equals(command) || "resume".equals(command)) {
 +            control.execute(() -> {
 +                Intent r = result(command, slot, request);
 +                try {
++                    if ("resume".equals(command)) mainUiPaused = false;
 +                    Emulator e = emulator;
 +                    if (e == null || !e.isRunning()) throw new IllegalStateException("no game is running");
 +                    if ("pause".equals(command)) {
-+                        if (!e.pause()) throw new IllegalStateException("can't pause");
++                        mainUiPaused = true;
++                        if (!e.pause()) { mainUiPaused = false; throw new IllegalStateException("can't pause"); }
 +                    } else {
 +                        e.resume();
 +                    }
@@ -335,8 +376,8 @@ index 000000000..b5b230aab
 +        }
 +        worker.execute(() -> {
 +            Intent r = result(command, slot, request);
++            Emulator e = emulator;
 +            try {
-+                Emulator e = emulator;
 +                if ("status".equals(command)) {
 +                    status(r, e);
 +                    r.putExtra(EXTRA_OK, true);
@@ -356,8 +397,21 @@ index 000000000..b5b230aab
 +                }
 +            } catch (Throwable t) {
 +                fail(r, t);
++            } finally {
++                if (!"status".equals(command)) keepPaused(e);
 +            }
 +            answer(ctx, replyTo, r);
++        });
++    }
++
++    /**
++     * After a save or load: a MainUI pause that came while it ran is put back (adapters that pause
++     * for a save resume after it, which would let the game run under MainUI's menu).
++     */
++    private static void keepPaused(final Emulator e) {
++        if (e == null) return;
++        control.execute(() -> {
++            if (mainUiPaused && emulator == e) try { e.pause(); } catch (Throwable ignored) {}
 +        });
 +    }
 +
@@ -422,10 +476,10 @@ index 000000000..b5b230aab
 +    }
 +}
 diff --git a/src/android/app/src/main/java/org/citra/citra_emu/NativeLibrary.kt b/src/android/app/src/main/java/org/citra/citra_emu/NativeLibrary.kt
-index b72ed2453..7e3842fa2 100644
+index b72ed2453..e9207bbdd 100644
 --- a/src/android/app/src/main/java/org/citra/citra_emu/NativeLibrary.kt
 +++ b/src/android/app/src/main/java/org/citra/citra_emu/NativeLibrary.kt
-@@ -670,6 +670,12 @@ object NativeLibrary {
+@@ -670,6 +670,14 @@ object NativeLibrary {
  
      external fun loadState(slot: Int)
  
@@ -434,12 +488,14 @@ index b72ed2453..7e3842fa2 100644
 +    external fun mainuiReady(): Boolean
 +    /** When [slot] was saved, ms since 1970 (0: empty or unreadable by this build). */
 +    external fun mainuiSlotTime(slot: Int): Long
++    /** The size of [slot]'s file in bytes (0: none). */
++    external fun mainuiSlotSize(slot: Int): Long
 +
      /**
       * Logs the Citra version, Android version and, CPU.
       */
 diff --git a/src/android/app/src/main/java/org/citra/citra_emu/activities/EmulationActivity.kt b/src/android/app/src/main/java/org/citra/citra_emu/activities/EmulationActivity.kt
-index 108fd3c6e..3d0c5e179 100644
+index 108fd3c6e..a1aa13c78 100644
 --- a/src/android/app/src/main/java/org/citra/citra_emu/activities/EmulationActivity.kt
 +++ b/src/android/app/src/main/java/org/citra/citra_emu/activities/EmulationActivity.kt
 @@ -159,6 +159,8 @@ class EmulationActivity : AppCompatActivity() {
@@ -447,18 +503,18 @@ index 108fd3c6e..3d0c5e179 100644
          isEmulationRunning = true
          instance = this
 +        // MainUI State API: MainUI (a frontend) saves and loads this game's states.
-+        io.github.mainui.stateapi.AzaharStates.launched()
++        io.github.mainui.stateapi.AzaharStates.launched(!isActivityRecreated)
  
          val game = try {
              intent.extras?.let { extras ->
-@@ -178,6 +180,7 @@ class EmulationActivity : AppCompatActivity() {
-     override fun onNewIntent(intent: Intent) {
-         super.onNewIntent(intent)
+@@ -180,6 +182,7 @@ class EmulationActivity : AppCompatActivity() {
          setIntent(intent)
-+        io.github.mainui.stateapi.AzaharStates.launched()
  
          NativeLibrary.stopEmulation()
++        io.github.mainui.stateapi.AzaharStates.launched(true)
          NativeLibrary.playTimeManagerStop()
+ 
+         isEmulationReady = false
 @@ -215,6 +218,7 @@ class EmulationActivity : AppCompatActivity() {
              }
          }
@@ -503,10 +559,10 @@ index 1de157e37..9e2f7ac00 100644
          var updateCheckPath = "/repos/azahar-emu/azahar"
          if (includePrereleases) { // This can return either a prerelease or a stable release,
 diff --git a/src/android/app/src/main/jni/native.cpp b/src/android/app/src/main/jni/native.cpp
-index fd52ce0d4..35e4575c0 100644
+index fd52ce0d4..d9bfb8959 100644
 --- a/src/android/app/src/main/jni/native.cpp
 +++ b/src/android/app/src/main/jni/native.cpp
-@@ -1356,4 +1356,31 @@ void Java_org_citra_citra_1emu_NativeLibrary_deleteVulkanShaderCache(JNIEnv* env
+@@ -1356,4 +1356,51 @@ void Java_org_citra_citra_1emu_NativeLibrary_deleteVulkanShaderCache(JNIEnv* env
          });
  }
  
@@ -535,6 +591,26 @@ index fd52ce0d4..35e4575c0 100644
 +        return 0;
 +    }
 +    return static_cast<jlong>(info.time * 1000);
++}
++
++jlong Java_org_citra_citra_1emu_NativeLibrary_mainuiSlotSize([[maybe_unused]] JNIEnv* env,
++                                                             [[maybe_unused]] jobject obj,
++                                                             jint slot) {
++    const Core::System& system{Core::System::GetInstance()};
++    if (!system.IsPoweredOn()) {
++        return 0;
++    }
++    u64 title_id;
++    if (system.GetAppLoader().ReadProgramId(title_id) != Loader::ResultStatus::Success) {
++        return 0;
++    }
++    // (The name core/savestate.cpp gives it.)
++    const u64 movie_id = system.Movie().GetCurrentMovieID();
++    const std::string dir = FileUtil::GetUserPath(FileUtil::UserPath::StatesDir);
++    const std::string path =
++        movie_id ? fmt::format("{}{:016X}.movie{:016X}.{:02d}.cst", dir, title_id, movie_id, slot)
++                 : fmt::format("{}{:016X}.{:02d}.cst", dir, title_id, slot);
++    return static_cast<jlong>(FileUtil::GetSize(path));
 +}
 +
  } // extern "C"
