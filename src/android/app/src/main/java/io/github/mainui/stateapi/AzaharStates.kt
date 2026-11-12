@@ -69,7 +69,10 @@ object AzaharStates : MainUIStateApi.Emulator {
         return true
     }
 
-    override fun restoreOwnPause() = NativeLibrary.pauseEmulation()
+    override fun restoreOwnPause() {
+        if (NativeLibrary.mainuiReady()) NativeLibrary.pauseEmulation()
+        pausedByMainUi = false // (the user's pause again, even if MainUI paused meanwhile)
+    }
 
     override fun save(slot: Int): String {
         val n = n(slot)
