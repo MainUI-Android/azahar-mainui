@@ -17,10 +17,14 @@ object AzaharStates : MainUIStateApi.Emulator {
     /** A game was just asked for: the one running before it doesn't count until it has stopped. */
     @Volatile private var waitForStop = false
 
-    /** A game is starting (the activity created, or handed a new game): attach for it. */
+    /**
+     * The activity is up: attach. [newGame]: a game is starting, the one running before it
+     * doesn't count until it has stopped (not when the activity is only recreated, which keeps
+     * the game running).
+     */
     @JvmStatic
-    fun launched() {
-        waitForStop = NativeLibrary.isRunning()
+    fun launched(newGame: Boolean) {
+        if (newGame) waitForStop = NativeLibrary.isRunning()
         MainUIStateApi.attach(this)
     }
 
@@ -42,18 +46,38 @@ object AzaharStates : MainUIStateApi.Emulator {
 
     override fun slotCount() = NativeLibrary.SAVESTATE_SLOT_COUNT - 1
 
+    /** MainUI's pause took effect (not one Azahar's own menu holds). */
+    @Volatile private var pausedByMainUi = false
+
     override fun pause(): Boolean {
-        NativeLibrary.pauseEmulation()
+        if (NativeLibrary.mainuiReady()) {
+            NativeLibrary.pauseEmulation()
+            pausedByMainUi = true
+        }
         return true
     }
 
-    override fun resume() = NativeLibrary.unPauseEmulation()
+    override fun resume() {
+        if (!pausedByMainUi) return
+        pausedByMainUi = false
+        NativeLibrary.unPauseEmulation()
+    }
 
     override fun save(slot: Int): String {
         val n = n(slot)
         val start = System.currentTimeMillis() / 1000 * 1000 // (the state's time is in whole seconds)
         NativeLibrary.saveState(n)
-        if (!MainUIStateApi.await({ NativeLibrary.mainuiSlotTime(n) >= start }, 60_000)) {
+        // The header is written first, the state after it: done once the file stops growing.
+        var size = -1L
+        var same = 0
+        if (!MainUIStateApi.await({
+                if (NativeLibrary.mainuiSlotTime(n) < start) return@await false
+                val now = NativeLibrary.mainuiSlotSize(n)
+                same = if (now == size && now > 256) same + 1 else 0
+                size = now
+                Thread.sleep(100)
+                same >= 3
+            }, 60_000)) {
             throw IllegalStateException("Azahar didn't finish saving the state")
         }
         return "Azahar slot $n"

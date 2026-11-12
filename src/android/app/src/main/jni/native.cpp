@@ -1386,4 +1386,24 @@ jlong Java_org_citra_citra_1emu_NativeLibrary_mainuiSlotTime([[maybe_unused]] JN
     return static_cast<jlong>(info.time * 1000);
 }
 
+jlong Java_org_citra_citra_1emu_NativeLibrary_mainuiSlotSize([[maybe_unused]] JNIEnv* env,
+                                                             [[maybe_unused]] jobject obj,
+                                                             jint slot) {
+    const Core::System& system{Core::System::GetInstance()};
+    if (!system.IsPoweredOn()) {
+        return 0;
+    }
+    u64 title_id;
+    if (system.GetAppLoader().ReadProgramId(title_id) != Loader::ResultStatus::Success) {
+        return 0;
+    }
+    // (The name core/savestate.cpp gives it.)
+    const u64 movie_id = system.Movie().GetCurrentMovieID();
+    const std::string dir = FileUtil::GetUserPath(FileUtil::UserPath::StatesDir);
+    const std::string path =
+        movie_id ? fmt::format("{}{:016X}.movie{:016X}.{:02d}.cst", dir, title_id, movie_id, slot)
+                 : fmt::format("{}{:016X}.{:02d}.cst", dir, title_id, slot);
+    return static_cast<jlong>(FileUtil::GetSize(path));
+}
+
 } // extern "C"

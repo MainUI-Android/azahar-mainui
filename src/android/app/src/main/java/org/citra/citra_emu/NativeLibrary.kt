@@ -686,6 +686,8 @@ object NativeLibrary {
     external fun mainuiReady(): Boolean
     /** When [slot] was saved, ms since 1970 (0: empty or unreadable by this build). */
     external fun mainuiSlotTime(slot: Int): Long
+    /** The size of [slot]'s file in bytes (0: none). */
+    external fun mainuiSlotSize(slot: Int): Long
 
     /**
      * Logs the Citra version, Android version and, CPU.
