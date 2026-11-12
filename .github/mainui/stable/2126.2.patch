@@ -1,4 +1,4 @@
-MainUI patch 2d762f738b49
+MainUI patch bd4bbc04eaa4
 diff --git a/src/android/app/build.gradle.kts b/src/android/app/build.gradle.kts
 index d873af155..19cb3aaab 100644
 --- a/src/android/app/build.gradle.kts
@@ -50,10 +50,10 @@ index 022a4f625..afe7e513e 100644
  
 diff --git a/src/android/app/src/main/java/io/github/mainui/stateapi/AzaharStates.kt b/src/android/app/src/main/java/io/github/mainui/stateapi/AzaharStates.kt
 new file mode 100644
-index 000000000..16d0b33f0
+index 000000000..e1ca60fad
 --- /dev/null
 +++ b/src/android/app/src/main/java/io/github/mainui/stateapi/AzaharStates.kt
-@@ -0,0 +1,103 @@
+@@ -0,0 +1,106 @@
 +package io.github.mainui.stateapi
 +
 +import org.citra.citra_emu.NativeLibrary
@@ -125,7 +125,10 @@ index 000000000..16d0b33f0
 +        return true
 +    }
 +
-+    override fun restoreOwnPause() = NativeLibrary.pauseEmulation()
++    override fun restoreOwnPause() {
++        if (NativeLibrary.mainuiReady()) NativeLibrary.pauseEmulation()
++        pausedByMainUi = false // (the user's pause again, even if MainUI paused meanwhile)
++    }
 +
 +    override fun save(slot: Int): String {
 +        val n = n(slot)
@@ -159,10 +162,10 @@ index 000000000..16d0b33f0
 +}
 diff --git a/src/android/app/src/main/java/io/github/mainui/stateapi/MainUIStateApi.java b/src/android/app/src/main/java/io/github/mainui/stateapi/MainUIStateApi.java
 new file mode 100644
-index 000000000..0cc3abec5
+index 000000000..86487ab01
 --- /dev/null
 +++ b/src/android/app/src/main/java/io/github/mainui/stateapi/MainUIStateApi.java
-@@ -0,0 +1,332 @@
+@@ -0,0 +1,338 @@
 +package io.github.mainui.stateapi;
 +
 +import android.content.BroadcastReceiver;
@@ -395,12 +398,17 @@ index 000000000..0cc3abec5
 +            Intent r = result(command, slot, request);
 +            Emulator e = emulator;
 +            Emulator lifted = null;
++            long liftedAt = 0;
 +            try {
 +                if ("status".equals(command)) {
 +                    status(r, e);
 +                    r.putExtra(EXTRA_OK, true);
 +                } else if ("save".equals(command) || "load".equals(command)) {
-+                    if (e != null && !mainUiPaused && e.liftOwnPause()) lifted = e;
++                    // (Not for a launch's command: the game it is for has just started, with no pause of its own.)
++                    if (e != null && notBefore == 0 && !mainUiPaused) {
++                        long at = attachedAt;
++                        if (e.liftOwnPause()) { lifted = e; liftedAt = at; }
++                    }
 +                    if (!waitReady(waitMs, settleMs, notBefore)) throw new IllegalStateException(emulator == null ? "no game is running" : "the game wasn't ready");
 +                    e = emulator;
 +                    if (slot != RESUME_SLOT && (slot < 0 || slot >= e.slotCount())) throw new IllegalArgumentException("no slot " + slot);
@@ -417,7 +425,8 @@ index 000000000..0cc3abec5
 +            } catch (Throwable t) {
 +                fail(r, t);
 +            } finally {
-+                if (lifted != null) try { lifted.restoreOwnPause(); } catch (Throwable ignored) {}
++                // Put back on the same game only.
++                if (lifted != null && emulator == lifted && attachedAt == liftedAt) try { lifted.restoreOwnPause(); } catch (Throwable ignored) {}
 +                if (!"status".equals(command)) keepPaused(e);
 +            }
 +            answer(ctx, replyTo, r);
