@@ -168,7 +168,7 @@ class EmulationActivity : AppCompatActivity() {
         isEmulationRunning = true
         instance = this
         // MainUI State API: MainUI (a frontend) saves and loads this game's states.
-        io.github.mainui.stateapi.AzaharStates.launched()
+        io.github.mainui.stateapi.AzaharStates.launched(!isActivityRecreated)
 
         applyOrientationSettings() // Check for orientation settings at startup
 
@@ -186,9 +186,9 @@ class EmulationActivity : AppCompatActivity() {
             return
         }
         setIntent(intent)
-        io.github.mainui.stateapi.AzaharStates.launched()
 
         NativeLibrary.stopEmulation()
+        io.github.mainui.stateapi.AzaharStates.launched(true)
         NativeLibrary.playTimeManagerStop()
 
         isEmulationReady = false
