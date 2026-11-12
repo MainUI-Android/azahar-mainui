@@ -63,6 +63,14 @@ object AzaharStates : MainUIStateApi.Emulator {
         NativeLibrary.unPauseEmulation()
     }
 
+    override fun liftOwnPause(): Boolean {
+        if (pausedByMainUi || !isRunning() || NativeLibrary.mainuiReady()) return false
+        NativeLibrary.unPauseEmulation()
+        return true
+    }
+
+    override fun restoreOwnPause() = NativeLibrary.pauseEmulation()
+
     override fun save(slot: Int): String {
         val n = n(slot)
         val start = System.currentTimeMillis() / 1000 * 1000 // (the state's time is in whole seconds)
