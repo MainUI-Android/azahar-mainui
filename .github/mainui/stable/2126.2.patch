@@ -1,4 +1,4 @@
-MainUI patch 3cd283dbf8bf
+MainUI patch 2d762f738b49
 diff --git a/src/android/app/build.gradle.kts b/src/android/app/build.gradle.kts
 index d873af155..19cb3aaab 100644
 --- a/src/android/app/build.gradle.kts
@@ -50,10 +50,10 @@ index 022a4f625..afe7e513e 100644
  
 diff --git a/src/android/app/src/main/java/io/github/mainui/stateapi/AzaharStates.kt b/src/android/app/src/main/java/io/github/mainui/stateapi/AzaharStates.kt
 new file mode 100644
-index 000000000..b09debd02
+index 000000000..16d0b33f0
 --- /dev/null
 +++ b/src/android/app/src/main/java/io/github/mainui/stateapi/AzaharStates.kt
-@@ -0,0 +1,95 @@
+@@ -0,0 +1,103 @@
 +package io.github.mainui.stateapi
 +
 +import org.citra.citra_emu.NativeLibrary
@@ -119,6 +119,14 @@ index 000000000..b09debd02
 +        NativeLibrary.unPauseEmulation()
 +    }
 +
++    override fun liftOwnPause(): Boolean {
++        if (pausedByMainUi || !isRunning() || NativeLibrary.mainuiReady()) return false
++        NativeLibrary.unPauseEmulation()
++        return true
++    }
++
++    override fun restoreOwnPause() = NativeLibrary.pauseEmulation()
++
 +    override fun save(slot: Int): String {
 +        val n = n(slot)
 +        val start = System.currentTimeMillis() / 1000 * 1000 // (the state's time is in whole seconds)
@@ -151,10 +159,10 @@ index 000000000..b09debd02
 +}
 diff --git a/src/android/app/src/main/java/io/github/mainui/stateapi/MainUIStateApi.java b/src/android/app/src/main/java/io/github/mainui/stateapi/MainUIStateApi.java
 new file mode 100644
-index 000000000..1a79f34f4
+index 000000000..0cc3abec5
 --- /dev/null
 +++ b/src/android/app/src/main/java/io/github/mainui/stateapi/MainUIStateApi.java
-@@ -0,0 +1,320 @@
+@@ -0,0 +1,332 @@
 +package io.github.mainui.stateapi;
 +
 +import android.content.BroadcastReceiver;
@@ -257,8 +265,17 @@ index 000000000..1a79f34f4
 +         */
 +        default boolean pause() { return false; }
 +
-+        /** Lets the game run again after {@link #pause}. */
++        /** Lets the game run again after {@link #pause} (only a pause {@link #pause} made). */
 +        default void resume() {}
++
++        /**
++         * The emulator's own pause (its menu, the user's pause) is held, not MainUI's: lifted for a
++         * save or load, which need the game running. True when lifted ({@link #restoreOwnPause} after).
++         */
++        default boolean liftOwnPause() { return false; }
++
++        /** Puts back the pause {@link #liftOwnPause} lifted. */
++        default void restoreOwnPause() {}
 +    }
 +
 +    private static volatile Emulator emulator;
@@ -377,11 +394,13 @@ index 000000000..1a79f34f4
 +        worker.execute(() -> {
 +            Intent r = result(command, slot, request);
 +            Emulator e = emulator;
++            Emulator lifted = null;
 +            try {
 +                if ("status".equals(command)) {
 +                    status(r, e);
 +                    r.putExtra(EXTRA_OK, true);
 +                } else if ("save".equals(command) || "load".equals(command)) {
++                    if (e != null && !mainUiPaused && e.liftOwnPause()) lifted = e;
 +                    if (!waitReady(waitMs, settleMs, notBefore)) throw new IllegalStateException(emulator == null ? "no game is running" : "the game wasn't ready");
 +                    e = emulator;
 +                    if (slot != RESUME_SLOT && (slot < 0 || slot >= e.slotCount())) throw new IllegalArgumentException("no slot " + slot);
@@ -398,6 +417,7 @@ index 000000000..1a79f34f4
 +            } catch (Throwable t) {
 +                fail(r, t);
 +            } finally {
++                if (lifted != null) try { lifted.restoreOwnPause(); } catch (Throwable ignored) {}
 +                if (!"status".equals(command)) keepPaused(e);
 +            }
 +            answer(ctx, replyTo, r);
